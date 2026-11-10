@@ -19,5 +19,5 @@ python build_vocab.py
 # 4) 기준선 모델(Baseline A: Naive Bayes) 학습 및 평가
 python train_nb.py
 
-# 5) 딥러닝 모델(모델 B & 모델 C: LSTM + Mean Pooling) 학습, 최종 Test 평가, 오답 분석 및 새 입력 추론
-python train_eval_lstm.py
+# 5) 딥러닝 One-Factor 모델(모델 C) 학습, Test 평가, 오답 분석 및 새 입력 추론
+python train_eval_dl.py

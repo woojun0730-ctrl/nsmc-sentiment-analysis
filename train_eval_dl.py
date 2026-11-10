@@ -9,9 +9,8 @@ from konlpy.tag import Okt
 from tqdm import tqdm
 from sklearn.metrics import accuracy_score, f1_score
 
-from models import BiLSTMAttentionClassifier
+from models import LSTMMeanPoolClassifier, BiLSTMAttentionClassifier
 
-# 1. 데이터셋 및 토큰화 캐싱 정의
 class FastNSMCDataset(Dataset):
     def __init__(self, seqs, labels):
         self.seqs = seqs
@@ -74,43 +73,36 @@ def main():
     valid_loader = DataLoader(FastNSMCDataset(valid_seqs, valid_labels), batch_size=64, shuffle=False, collate_fn=collate_fn)
     test_loader = DataLoader(FastNSMCDataset(test_seqs, test_labels), batch_size=64, shuffle=False, collate_fn=collate_fn)
 
-    print("\n=== [2/5] 모델 C (Bi-LSTM + Attention) 학습 및 최적 가중치 저장 ===")
-    model = BiLSTMAttentionClassifier(len(vocab), embed_dim=128, hidden_dim=128, output_dim=1, dropout=0.4).to(device)
+    print("\n=== [2/5] 모델 C (LSTM + Masked Mean Pooling) 학습 및 가중치 저장 ===")
+    model_c = LSTMMeanPoolClassifier(len(vocab), embed_dim=100, hidden_dim=128, output_dim=1).to(device)
     criterion = nn.BCELoss()
-    optimizer = optim.AdamW(model.parameters(), lr=0.001, weight_decay=1e-4)
+    optimizer = optim.Adam(model_c.parameters(), lr=0.001)
 
-    EPOCHS = 4
-    best_valid_acc = 0.0
-
-    for epoch in range(EPOCHS):
-        model.train()
+    for epoch in range(3):
+        model_c.train()
         epoch_loss = 0
         for texts, labels in tqdm(train_loader, desc=f"Epoch {epoch+1}"):
             texts, labels = texts.to(device), labels.to(device)
             optimizer.zero_grad()
-            preds = model(texts)
+            preds = model_c(texts)
             loss = criterion(preds, labels)
             loss.backward()
             optimizer.step()
             epoch_loss += loss.item()
-
-        val_acc, val_f1, _, _ = evaluate(model, valid_loader, device)
+        val_acc, val_f1, _, _ = evaluate(model_c, valid_loader, device)
         print(f"Epoch {epoch+1} | Loss: {epoch_loss/len(train_loader):.4f} | Val Acc: {val_acc:.4f} | Val F1: {val_f1:.4f}")
 
-        if val_acc > best_valid_acc:
-            best_valid_acc = val_acc
-            torch.save(model.state_dict(), "best_bilstm_attn_model.pt")
-            print(f"  -> 최고 성능 갱신 및 체크포인트 저장! (Acc: {best_valid_acc:.4f})")
+    torch.save(model_c.state_dict(), "best_lstm_model.pt")
+    print("모델 저장 완료: best_lstm_model.pt")
 
-    print("\n=== [3/5] 저장된 최적 모델 로드 및 Test 세트 평가 ===")
-    best_model = BiLSTMAttentionClassifier(len(vocab), embed_dim=128, hidden_dim=128, output_dim=1).to(device)
-    best_model.load_state_dict(torch.load("best_bilstm_attn_model.pt", map_location=device))
-    test_acc, test_f1, test_preds, test_probs = evaluate(best_model, test_loader, device)
+    print("\n=== [3/5] 저장된 모델 C 불러오기 및 Test 세트 평가 ===")
+    eval_model = LSTMMeanPoolClassifier(len(vocab), embed_dim=100, hidden_dim=128, output_dim=1).to(device)
+    eval_model.load_state_dict(torch.load("best_lstm_model.pt", map_location=device))
+    test_acc, test_f1, test_preds, test_probs = evaluate(eval_model, test_loader, device)
 
     print("\n" + "=" * 45)
-    print("[최종 Test 세트 일반화 성능]")
-    print(f"Test Accuracy: {test_acc:.4f}")
-    print(f"Test Macro-F1: {test_f1:.4f}")
+    print(f"[모델 C 최종 Test 세트 성능]")
+    print(f"Test Accuracy: {test_acc:.4f} | Test Macro-F1: {test_f1:.4f}")
     print("=" * 45)
 
     print("\n=== [4/5] Test 세트 오답 사례 10개 추출 ===")
@@ -118,10 +110,10 @@ def main():
     for i in range(len(test_df)):
         if int(test_df['label'].iloc[i]) != int(test_preds[i]):
             err_cnt += 1
-            true_label = "긍정(1)" if int(test_df['label'].iloc[i]) == 1 else "부정(0)"
-            pred_label = "긍정(1)" if int(test_preds[i]) == 1 else "부정(0)"
+            t_label = "긍정(1)" if int(test_df['label'].iloc[i]) == 1 else "부정(0)"
+            p_label = "긍정(1)" if int(test_preds[i]) == 1 else "부정(0)"
             print(f"사례 {err_cnt}. 원문: {test_df['document'].iloc[i]}")
-            print(f"   -> 정답: {true_label} | 예측: {pred_label} (긍정 확률: {test_probs[i]:.4f})")
+            print(f"   -> 정답: {t_label} | 예측: {p_label} (긍정 확률: {test_probs[i]:.4f})")
             if err_cnt == 10:
                 break
 
@@ -133,16 +125,15 @@ def main():
         "예고편이 본편보다 재밌는 영화... 기대 많이 했는데 실망스럽네요",
         "그냥 킬링타임용으로 무난하게 볼 만합니다 엄청 좋지도 나쁘지도 않아요"
     ]
-    best_model.eval()
+    eval_model.eval()
     with torch.no_grad():
         for idx, text in enumerate(new_reviews, 1):
             tokens = okt.morphs(text)
             ids = [vocab.get(t, vocab["<UNK>"]) for t in tokens]
             in_tensor = torch.tensor(ids, dtype=torch.long).unsqueeze(0).to(device)
-            prob = best_model(in_tensor).item()
+            prob = eval_model(in_tensor).item()
             pred = "긍정(1)" if prob >= 0.5 else "부정(0)"
-            print(f"입력 {idx}: {text}")
-            print(f"   -> 예측: {pred} (긍정 확률: {prob:.4f})")
+            print(f"입력 {idx}: {text} -> 예측: {pred} (긍정 확률: {prob:.4f})")
 
 if __name__ == "__main__":
     main()
