@@ -11,6 +11,9 @@ from sklearn.metrics import accuracy_score, f1_score
 
 from models import LSTMMeanPoolClassifier, BiLSTMAttentionClassifier
 
+# ==========================================
+# 1. 데이터셋 및 토큰화 캐싱 정의
+# ==========================================
 class FastNSMCDataset(Dataset):
     def __init__(self, seqs, labels):
         self.seqs = seqs
@@ -56,7 +59,7 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"사용 장치: {device}")
 
-    print("\n=== [1/5] 어휘 사전 및 데이터 사전 캐싱 ===")
+    print("\n=== [1/6] 어휘 사전 및 데이터 사전 캐싱 ===")
     with open('vocab.json', 'r', encoding='utf-8') as f:
         vocab = json.load(f)
 
@@ -73,51 +76,57 @@ def main():
     valid_loader = DataLoader(FastNSMCDataset(valid_seqs, valid_labels), batch_size=64, shuffle=False, collate_fn=collate_fn)
     test_loader = DataLoader(FastNSMCDataset(test_seqs, test_labels), batch_size=64, shuffle=False, collate_fn=collate_fn)
 
-    print("\n=== [2/5] 모델 C (LSTM + Masked Mean Pooling) 학습 및 가중치 저장 ===")
+    # ==========================================
+    # 2. [One-Factor 실험] 모델 C: LSTM + Masked Mean Pooling
+    # ==========================================
+    print("\n" + "=" * 50)
+    print("=== [2/6] [One-Factor 실험] 모델 C (LSTM + Masked Mean Pooling) 학습 ===")
+    print("=" * 50)
     model_c = LSTMMeanPoolClassifier(len(vocab), embed_dim=100, hidden_dim=128, output_dim=1).to(device)
     criterion = nn.BCELoss()
-    optimizer = optim.Adam(model_c.parameters(), lr=0.001)
+    optimizer_c = optim.Adam(model_c.parameters(), lr=0.001)
 
     for epoch in range(3):
         model_c.train()
         epoch_loss = 0
-        for texts, labels in tqdm(train_loader, desc=f"Epoch {epoch+1}"):
+        for texts, labels in tqdm(train_loader, desc=f"모델 C - Epoch {epoch+1}"):
             texts, labels = texts.to(device), labels.to(device)
-            optimizer.zero_grad()
+            optimizer_c.zero_grad()
             preds = model_c(texts)
             loss = criterion(preds, labels)
             loss.backward()
-            optimizer.step()
+            optimizer_c.step()
             epoch_loss += loss.item()
         val_acc, val_f1, _, _ = evaluate(model_c, valid_loader, device)
         print(f"Epoch {epoch+1} | Loss: {epoch_loss/len(train_loader):.4f} | Val Acc: {val_acc:.4f} | Val F1: {val_f1:.4f}")
 
     torch.save(model_c.state_dict(), "best_lstm_model.pt")
-    print("모델 저장 완료: best_lstm_model.pt")
+    print("모델 C 저장 완료: best_lstm_model.pt")
 
-    print("\n=== [3/5] 저장된 모델 C 불러오기 및 Test 세트 평가 ===")
-    eval_model = LSTMMeanPoolClassifier(len(vocab), embed_dim=100, hidden_dim=128, output_dim=1).to(device)
-    eval_model.load_state_dict(torch.load("best_lstm_model.pt", map_location=device))
-    test_acc, test_f1, test_preds, test_probs = evaluate(eval_model, test_loader, device)
+    # 모델 C Test 평가
+    test_acc_c, test_f1_c, test_preds_c, test_probs_c = evaluate(model_c, test_loader, device)
+    print(f"\n[모델 C 최종 Test 세트 성능]")
+    print(f"Test Accuracy: {test_acc_c:.4f} | Test Macro-F1: {test_f1_c:.4f}")
 
-    print("\n" + "=" * 45)
-    print(f"[모델 C 최종 Test 세트 성능]")
-    print(f"Test Accuracy: {test_acc:.4f} | Test Macro-F1: {test_f1:.4f}")
-    print("=" * 45)
-
-    print("\n=== [4/5] Test 세트 오답 사례 10개 추출 ===")
+    # ==========================================
+    # 3. 모델 C Test 세트 오답 사례 10개 출력
+    # ==========================================
+    print("\n=== [3/6] 모델 C Test 세트 오답 사례 10개 ===")
     err_cnt = 0
     for i in range(len(test_df)):
-        if int(test_df['label'].iloc[i]) != int(test_preds[i]):
+        if int(test_df['label'].iloc[i]) != int(test_preds_c[i]):
             err_cnt += 1
             t_label = "긍정(1)" if int(test_df['label'].iloc[i]) == 1 else "부정(0)"
-            p_label = "긍정(1)" if int(test_preds[i]) == 1 else "부정(0)"
+            p_label = "긍정(1)" if int(test_preds_c[i]) == 1 else "부정(0)"
             print(f"사례 {err_cnt}. 원문: {test_df['document'].iloc[i]}")
-            print(f"   -> 정답: {t_label} | 예측: {p_label} (긍정 확률: {test_probs[i]:.4f})")
+            print(f"   -> 정답: {t_label} | 예측: {p_label} (긍정 확률: {test_probs_c[i]:.4f})")
             if err_cnt == 10:
                 break
 
-    print("\n=== [5/5] 새로운 입력 문장 5개 시연 ===")
+    # ==========================================
+    # 4. 모델 C 새로운 입력 5개 시연
+    # ==========================================
+    print("\n=== [4/6] 모델 C 새로운 입력 문장 5개 시연 ===")
     new_reviews = [
         "배우들 연기력이 미쳤고 연출도 완벽해서 시간 가는 줄 모르고 봤네요 최고의 명작!",
         "스토리 개연성이 하나도 없고 지루해서 보다가 중간에 나왔습니다 돈 아까워요",
@@ -125,15 +134,54 @@ def main():
         "예고편이 본편보다 재밌는 영화... 기대 많이 했는데 실망스럽네요",
         "그냥 킬링타임용으로 무난하게 볼 만합니다 엄청 좋지도 나쁘지도 않아요"
     ]
-    eval_model.eval()
+    model_c.eval()
     with torch.no_grad():
         for idx, text in enumerate(new_reviews, 1):
             tokens = okt.morphs(text)
             ids = [vocab.get(t, vocab["<UNK>"]) for t in tokens]
             in_tensor = torch.tensor(ids, dtype=torch.long).unsqueeze(0).to(device)
-            prob = eval_model(in_tensor).item()
+            prob = model_c(in_tensor).item()
             pred = "긍정(1)" if prob >= 0.5 else "부정(0)"
             print(f"입력 {idx}: {text} -> 예측: {pred} (긍정 확률: {prob:.4f})")
+
+    # ==========================================
+    # 5. [심화 확장 연구] 2층 Bi-LSTM + Self-Attention 학습
+    # ==========================================
+    print("\n" + "=" * 50)
+    print("=== [5/6] [심화 확장 연구] 2층 Bi-LSTM + Self-Attention 학습 ===")
+    print("=" * 50)
+    model_attn = BiLSTMAttentionClassifier(len(vocab), embed_dim=128, hidden_dim=128, output_dim=1, dropout=0.4).to(device)
+    optimizer_attn = optim.AdamW(model_attn.parameters(), lr=0.001, weight_decay=1e-4)
+
+    best_val_acc = 0.0
+    for epoch in range(4):
+        model_attn.train()
+        epoch_loss = 0
+        for texts, labels in tqdm(train_loader, desc=f"심화 모델 - Epoch {epoch+1}"):
+            texts, labels = texts.to(device), labels.to(device)
+            optimizer_attn.zero_grad()
+            preds = model_attn(texts)
+            loss = criterion(preds, labels)
+            loss.backward()
+            optimizer_attn.step()
+            epoch_loss += loss.item()
+            
+        val_acc, val_f1, _, _ = evaluate(model_attn, valid_loader, device)
+        print(f"Epoch {epoch+1} | Loss: {epoch_loss/len(train_loader):.4f} | Val Acc: {val_acc:.4f} | Val F1: {val_f1:.4f}")
+
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            torch.save(model_attn.state_dict(), "best_bilstm_attn_model.pt")
+
+    # ==========================================
+    # 6. 심화 확장 모델 Test 세트 최종 평가
+    # ==========================================
+    print("\n=== [6/6] 심화 확장 모델(Bi-LSTM + Attention) Test 최종 평가 ===")
+    model_attn.load_state_dict(torch.load("best_bilstm_attn_model.pt", map_location=device))
+    test_acc_a, test_f1_a, _, _ = evaluate(model_attn, test_loader, device)
+    print(f"\n[심화 확장 모델 최종 Test 세트 성능]")
+    print(f"Test Accuracy: {test_acc_a:.4f} | Test Macro-F1: {test_f1_a:.4f}")
+    print("=" * 50)
 
 if __name__ == "__main__":
     main()
