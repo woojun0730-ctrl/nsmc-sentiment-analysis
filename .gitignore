@@ -1,0 +1,17 @@
+# 1. 원본 데이터 및 정제 CSV 파일 (용량 초과 방지)
+ratings_train.txt
+ratings_test.txt
+train_clean.csv
+valid_clean.csv
+test_clean.csv
+
+# 2. 딥러닝 모델 가중치 체크포인트 (대용량 바이너리)
+*.pt
+*.bin
+
+# 3. 파이썬 캐시 및 가상환경 폴더
+__pycache__/
+*.pyc
+venv/
+.env/
+.ipynb_checkpoints/
